@@ -1,4 +1,5 @@
-package live.ebox.myapplication
+package live.ebox.myapplication.communication
+
 
 import android.app.Activity
 import android.net.Uri
@@ -8,44 +9,60 @@ import com.google.android.gms.wearable.*
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 
-class WearableMessageManger private constructor(private val activity: Activity) :
+class WearableMessageManger private constructor(
+    private val activity: Activity,
+    private val capabilityName: String
+) :
     DataClient.OnDataChangedListener,
     MessageClient.OnMessageReceivedListener,
     CapabilityClient.OnCapabilityChangedListener {
 
+    data class Builder(
+        private var activity: Activity,
+        private var capabilityName: String
+    ) {
+        fun setWearableMessageListener(wearableMessageListener: WearableMessageListener) =
+            apply { Companion.wearableMessageListener = wearableMessageListener }
+
+        fun build() = getInstance(activity, capabilityName)
+    }
+
     companion object {
+
+        private var wearableMessageListener: WearableMessageListener? = null
+
         @Volatile
         private var INSTANCE: WearableMessageManger? = null
-        fun getInstance(activity: Activity): WearableMessageManger {
+        private fun getInstance(activity: Activity, capabilityName: String): WearableMessageManger {
             if (INSTANCE == null) {
                 synchronized(this) {
-                    INSTANCE = WearableMessageManger(activity)
+                    INSTANCE = WearableMessageManger(activity, capabilityName)
                 }
             }
             return INSTANCE!!
         }
     }
 
-
-    private val CAPABILITY_1_NAME = "capability_1"
-    private val CAPABILITY_2_NAME = "capability_2"
     private var nodeId: String? = null
-
     private val TAG = "WearableMessageManger"
-    private val wearableMessageListener = activity as WearableMessageListener
+    private var listenersAttached: Boolean = false
+
+    init {
+        onResume()
+    }
+
 
     fun onResume() {
-        Wearable.getDataClient(activity).addListener(this)
-        Wearable.getMessageClient(activity).addListener(this)
-        Wearable.getCapabilityClient(activity)
-            .addListener(this, Uri.parse("wear://"), CapabilityClient.FILTER_REACHABLE)
-
-        requestCapability(CAPABILITY_1_NAME)
-
-        /*btn?.setOnClickListener {
-
-        }*/
+        if (!listenersAttached) {
+            Wearable.getDataClient(activity).addListener(this)
+            Wearable.getMessageClient(activity).addListener(this)
+            Wearable.getCapabilityClient(activity)
+                .addListener(this, Uri.parse("wear://"), CapabilityClient.FILTER_REACHABLE)
+            requestCapability(capabilityName)
+            listenersAttached = true
+        }
     }
+
 
     fun sendMessage(path: String, message: String) {
         nodeId?.let { nid ->
@@ -57,8 +74,8 @@ class WearableMessageManger private constructor(private val activity: Activity) 
         }
     }
 
+    @Suppress("BlockingMethodInNonBlockingContext")
     private fun requestCapability(capabilityName: String) {
-
         GlobalScope.launch {
             val capabilityInfo: CapabilityInfo = Tasks.await(
                 Wearable.getCapabilityClient(activity)
@@ -67,7 +84,6 @@ class WearableMessageManger private constructor(private val activity: Activity) 
                         CapabilityClient.FILTER_REACHABLE
                     )
             )
-            // capabilityInfo has the reachable nodes with the capability
             updateNodeId(capabilityInfo)
         }
     }
@@ -87,6 +103,7 @@ class WearableMessageManger private constructor(private val activity: Activity) 
         Wearable.getDataClient(activity).removeListener(this)
         Wearable.getMessageClient(activity).removeListener(this)
         Wearable.getCapabilityClient(activity).removeListener(this)
+        listenersAttached = false
     }
 
     override fun onDataChanged(dataEventBuffer: DataEventBuffer) {
@@ -96,9 +113,14 @@ class WearableMessageManger private constructor(private val activity: Activity) 
     override fun onMessageReceived(messageEvent: MessageEvent) {
         Log.d(
             TAG,
-            "onMessageReceived-> data =${String(messageEvent.data)} | path =${messageEvent.path}"
+            "onMessageReceived-> data =${String(messageEvent.data)} | path =${messageEvent.path} | sourceNodeId =${messageEvent.sourceNodeId} | requestId =${messageEvent.requestId}"
         )
-        wearableMessageListener.onMessageReceived(String(messageEvent.data))
+        wearableMessageListener?.onMessageReceived(
+            data = messageEvent.data,
+            path = messageEvent.path,
+            sourceNodeId = messageEvent.sourceNodeId,
+            requestId = messageEvent.requestId
+        )
     }
 
     override fun onCapabilityChanged(capabilityInfo: CapabilityInfo) {
